@@ -2,10 +2,10 @@
 <html>
 <!--
   Created using localhost:3000
-  Source can be edited via http://localhost:3000/ofizab/32/edit
+  Source can be edited via http://localhost:3000/ofizab/33/edit
 -->
   <head>
-<script src="http://ajax.googleapis.com/ajax/libs/jquery/1/jquery.min.js"></script>
+<script src="http://code.jquery.com/jquery-1.9.0.min.js"></script>
 <meta name="description" content="Paris Cycling Trip 16 August 2013" />
     <meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
     <style type="text/css">
@@ -55,7 +55,7 @@
         var locations = multimediaLocationsList();       
         currentLocation = new CurrentLocation(locations);
         
-        //createDirections(map, locations);
+        createDirections(map, locations);
 
         markers = createLocationMarkers(map, locations, currentLocation);        
 
@@ -215,7 +215,11 @@
                }
       };
       YoutubeLocation.prototype.getShadow = function getShadow(){
-        return new google.maps.Symbol({path:"m 100 0 m 0 100"});
+        return {path: 'm 0 0 h 42 v 62 h -42  z',
+			
+                //  fillColor: "#333",
+                  fillOpacity: 1,
+}
       }
       
       //Could add imgur location or other kind of locations
@@ -489,7 +493,6 @@
       
 
       function createLocationMarkers(map, locations, currentLocation){
-        
         function locationToHTML(location){
           var html = location.title + '  @ ' + location.time + '<br>' + location.html;
           return html;
@@ -499,12 +502,13 @@
         var currentlyOpenInfoWindow = null;
         
         $.each(locations, function(){
+          console.log(this.getShadow());
           var marker = new google.maps.Marker({
             map: map,
             position: this.latLng,
             title: this.title,
             icon: this.getIconURL(),
-            shadow: this.getShadow()
+            //shadow: this.getShadow(),
           });
           
           var infoWindow = new google.maps.InfoWindow({
