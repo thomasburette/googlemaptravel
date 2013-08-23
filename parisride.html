@@ -1,11 +1,774 @@
 <!DOCTYPE html>
 <html>
+<!--
+  Created using localhost:3000
+  Source can be edited via http://localhost:3000/ofizab/33/edit
+-->
   <head>
-<link rel="image_src" href="preview.png" />
+<script src="https://code.jquery.com/jquery-1.9.0.min.js"></script>
+<meta name="description" content="Paris Cycling Trip 16 August 2013" />
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
+    <style type="text/css">
+      html { height: 100% }
+      body { height: 100%; margin: 0; padding: 0 }
+      #map-canvas { height: 100% }
+    </style>
+    <script type="text/javascript" src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAFD0rwkRlDB7VLPdtxS_K52s7th5Yqtf0&sensor=false&region=FR">
+    </script>
+    <script type="text/javascript">
+      
+      //Convenience functions
+      if (typeof String.prototype.startsWith != 'function') {
+        String.prototype.startsWith = function (str){
+          return this.slice(0, str.length) == str;
+        };
+      }
+      
+      //inheritance stuff
+      //Parasitic  Combination inheritance
+      if(typeof object !== 'function'){
+        function object(o){
+          function F(){};
+          F.prototype = o;
+          return new F();
+        }
+      }
+      function inheritPrototype(subType, superType){
+        var prototype = object(superType.prototype);
+        prototype.constructor = subType;
+        subType.prototype = prototype;
+      }
+
+      function InvalidArgumentError(message, variableName){
+        this.name = "InvalidArgumentError";
+        this.message = message;
+        this.variableName = variableName;//optional
+      }
+      inheritPrototype(InvalidArgumentError, Error);
+
+      
+      
+      function initialize() {
+        //global
+        map = createMap();
+        
+        var locations = multimediaLocationsList();       
+        currentLocation = new CurrentLocation(locations);
+        
+        createDirections(map, locations);
+
+        markers = createLocationMarkers(map, locations, currentLocation);        
+
+        timeline = createTimelineControl(locations, currentLocation);
+      }
+      google.maps.event.addDomListener(window, 'load', initialize);
+      
+      
+      
+      
+      function createMap(){
+        var mapOptions = {
+          center: new google.maps.LatLng(48.865392,2.330983),
+          zoom: 13,
+          zoomControlOptions: {
+            style: google.maps.SMALL
+            //position: google.maps.ControlPosition.RIGHT_CENTER
+          }
+          //mapTypeId: google.maps.MapTypeId.ROADMAP
+        };
+        return new google.maps.Map(document.getElementById("map-canvas"),
+            mapOptions);
+      }
+      
+      /**
+       Keep track of the location currently selected.
+       Allows to change the current locationl, an event is fired when it happens
+      */
+      function CurrentLocation(locations){
+        this.locations = locations;
+        this.currentLocationIndex = -1;
+      };
+      /**
+       * @returns the current location or null of there is no currently selected location
+       */
+      CurrentLocation.prototype.getCurrentLocation = function getCurrentLocation(){
+        return this.currentLocationIndex == -1 ? null : this.locations[this.currentLocationIndex];
+      };
+      /**
+       * Sets a new current location. May also unset current location. 
+       * Fire an event if the current location has changed.
+       * @constructor
+       * @param {MultimediaLocation} location to become the new current location or null to clear the current location
+       * @throws {InvalidArgumentError} multimediaLocations does not belong in the known list of locations
+       */          
+      CurrentLocation.prototype.setCurrentLocation = function setCurrentLocation(location){
+        var index;
+        if(location == null){
+          index = -1;
+        }else{
+          index = $.inArray(location, this.locations);
+          if(index == -1) throw new InvalidArgumentError('not a known location', 'location');
+        }
+        
+        if(index != this.currentLocationIndex){
+          //debugger;
+          var previousLocation = this.getCurrentLocation();
+          this.currentLocationIndex = index;
+          console.log('fire event', location, 'x', previousLocation);
+          google.maps.event.trigger(this, 'selectionChange', location, previousLocation);
+        }
+      };
+      CurrentLocation.prototype.selectPreviousLocation = function selectPreviousLocation(){
+        var newLocation = null;
+        if(this.locations.length != 0 && this.currentLocationIndex == -1){
+          newLocation = $(this.locations).last()[0];
+        }else{
+          newLocation = this.currentLocationIndex == 0 ? null : this.locations[this.currentLocationIndex - 1];
+        }
+        this.setCurrentLocation(newLocation);
+      };
+      CurrentLocation.prototype.selectNextLocation = function selectNextLocation(){
+        var newLocation = null;
+        if(this.locations.length != 0 && this.currentLocationIndex == -1){
+          newLocation = this.locations[0];
+        }else{
+          newLocation = this.currentLocationIndex == this.locations.length - 1 ? null : this.locations[this.currentLocationIndex + 1];
+        }
+        this.setCurrentLocation(newLocation);
+      };
+      
+      
+      function MultimediaLocation(latLng, time, title, html, waypointsToNextLocation){
+        this.latLng = latLng;
+        this.time = time;
+        this.title = title;
+        this.html = html;
+        this.waypointsToNextLocation = (waypointsToNextLocation != null)?waypointsToNextLocation : [];
+      }
+      /**
+       * URL of an icon representing the multimedialocation. Null if none available
+       * @abstract
+       */
+      MultimediaLocation.prototype.getIconURL = function getIconURL(){
+        return null;
+      };
+      /**
+       * @abstract
+       */
+      MultimediaLocation.prototype.getShadow = function getShadow(){
+        return null;
+      }
+      
+      
+      /**
+       * A multimedia location which made of multiple multimedia locations
+       * The coordonates come from he first MmultimediaLocation. 
+       * The html is a combination of the html of each MultimediaLocation
+       * The waypointsToNextLocation is the combination of latLng and waypoints of each MultimediaLocation
+       * @constructor
+       * @param {array} array of MultimediaLocation
+       * @throws {InvalidArgumentError} multimediaLocations parameter is empty
+       */
+      function MultimediaLocationMultiple(multimediaLocations){
+        if(multimediaLocations.length == 0) 
+          throw new InvalidArgumentError("parameter must be a non empty array or multimediaLocation");
+        var firstMultimediaLocation = multimediaLocations[0]
+        this.firstMultimediaLocation = firstMultimediaLocation;
+        MultimediaLocation.call(this, 
+                                this.firstMultimediaLocation.latLng, 
+                                this.firstMultimediaLocation.time, 
+                                this.firstMultimediaLocation.title, 
+                                $.map(multimediaLocations, function(ml){return ml.html}).join('<br>'), 
+                                //if later multimediLocation are at the same as the first, do not add to the waypoints
+                                //jquery map flattens!
+                                $.map(multimediaLocations, function(ml){ 
+                                  return (ml.latLng.equals(firstMultimediaLocation.latLng)?[]:[ml.latLng]).concat(ml.waypointsToNextLocation)
+                                }))
+      }
+      inheritPrototype(MultimediaLocationMultiple, MultimediaLocation);
+      MultimediaLocationMultiple.prototype.getIconURL = function getIconURL(){
+        return this.firstMultimediaLocation.getIconURL();
+      };
+      MultimediaLocationMultiple.prototype.getShadow = function getShadow(){
+        return this.firstMultimediaLocation.getShadow();
+      }
+        
+      function YoutubeLocation(latLng, time, title, youtubeID, waypointsToNextLocation, autoplay){      
+        this.youtubeID = youtubeID;
+        var autoplay = (autoplay === true || autoplay === undefined ) ? 1 : 0;
+        var html = '<iframe width="420" height="315" src="http://www.youtube.com/embed/'+ 
+          youtubeID + 
+            '?rel=0&autoplay=' +
+              autoplay +
+                '" frameborder="0" allowfullscreen></iframe>';
+        MultimediaLocation.call(this, latLng, time, title, html, waypointsToNextLocation);
+      }
+      inheritPrototype(YoutubeLocation, MultimediaLocation);
+      YoutubeLocation.prototype.getIconURL = function getIconURL(){
+        return {url: 'http://img.youtube.com/vi/'+ this.youtubeID +'/default.jpg',
+                //scaled seems incompatible with origin
+                //values to remove black bars on the side of my videos. 
+                //could upload custom thumbnail to youtube without the bars
+                //scaledSize : new google.maps.Size(40, 40),
+                size:new google.maps.Size(40, 60),
+                origin:new google.maps.Point(40, 15)
+               }
+      };
+      YoutubeLocation.prototype.getShadow = function getShadow(){
+        return {path: 'm 0 0 h 42 v 62 h -42  z',
+			
+                //  fillColor: "#333",
+                  fillOpacity: 1,
+}
+      }
+      
+      //Could add imgur location or other kind of locations
+      
+      
+      //changes here may affect directionsWaypoint()
+      function multimediaLocationsList(){
+        var locations = [];
+        
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.890563, 2.384609),
+                                '10:21',
+                                'Le départ',
+                                'YhD5eib8Q4g')
+        );
+        
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.888254,2.379703),
+                                '10:29',
+                                'Traversée du pont',
+                                'Um8kcYjto-c')
+        );
+        
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.891626,2.344914),
+                                '10:49',
+                                'Auberge de jeunesse',
+                                '2Dhv4A34tzg', 
+                                [{location: new google.maps.LatLng(48.889792,2.343981)}, 
+                                 {location: new google.maps.LatLng(48.889263,2.338359)}])
+        );
+
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.887796, 2.339786),
+                                '11:16',
+                                'Vignes de Montmartre',
+                                'menHYvSgHaA')
+        );        
+        
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.887762,2.339728),
+                                '11:20',
+                                'Vignes de Montmartre 2',
+                                'oUvGlHdalIg')
+        );
+        
+        
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.886618,2.341305),
+                                '11:26',
+                                'Place du Tertre',
+                                'EUOe5mIAzfc')
+        );
+
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.887513,2.335323),
+                                '12:04',
+                                'Descente de Montmartre',
+                                'nvsGxr0WROQ',
+                                [{location: new google.maps.LatLng(48.886857,2.33384)}, 
+                                 {location: new google.maps.LatLng(48.885094,2.33693)}, 
+                                 {location: new google.maps.LatLng(48.883471,2.336544)}])
+        );
+
+        
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.883923,2.332167),
+                                '12:13',
+                                'Moulin Rouge',
+                                'WXa6bJzxQtc')
+        );
+
+        
+        locations.push(new MultimediaLocationMultiple([
+          new YoutubeLocation(new google.maps.LatLng(48.878582,2.308125),
+                              '13:09',
+                              'Déjeuné au parc Monceau',
+                              'elKkv5vcj9A'),
+          new YoutubeLocation(new google.maps.LatLng(48.878582,2.308125),
+                              '13:24',
+                              'Déjeuné au parc Monceau',
+                              'Pibl36NdpCI',
+                              [],
+                              false),
+          new YoutubeLocation(new google.maps.LatLng(48.878582,2.308125),
+                              '13:31',
+                              'Déjeuné au parc Monceau',
+                              'NeqDYf1ItxQ',
+                              [],
+                              false)
+        ]));
+        
+                            
+        /*locations.push(
+            new MultimediaLocation(new google.maps.LatLng(48.878582,2.308125),
+                                   '13:09',
+                                'Déjeuné au parc Monceau',
+                                '<iframe width="420" height="315" src="http://www.youtube.com/embed/elKkv5vcj9A?rel=0&autoplay=1" frameborder="0" allowfullscreen></iframe>'+
+                                   '<br>'+
+                                  '<iframe width="420" height="315" src="http://www.youtube.com/embed/Pibl36NdpCI?rel=0" frameborder="0" allowfullscreen></iframe>'+
+                                   '<br>'+
+                                  '<iframe width="420" height="315" src="http://www.youtube.com/embed/NeqDYf1ItxQ?rel=0" frameborder="0" allowfullscreen></iframe>'
+                                  )
+        
+        );
+        */
+
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.872986,2.287427),
+                                '14:18',
+                                  'Avenue Foch',
+                                'SNDh1B_JKcA')
+        );
+
+
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.864192,2.2623),
+                                '14:27',
+                                'Bois de boulogne 1',
+                                'dAAHxa88WP4')
+        );
+
+
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.86408,2.262201),
+                                '14:29',
+                                'Bois de boulogne 2',
+                                'IOHp5ZlhHMk')
+        );
+
+
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.861465,2.261026),
+                                '14:36',
+                                'Bois de boulogne 3',
+                                'Kk36aTwxUYo')
+        );
+        
+
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.85982,2.259707),
+                                '14:37',
+                                'Bois de boulogne 4',
+                                'bQ-R2Dw3VTE',
+                                [{location: new google.maps.LatLng(48.850724,2.253009)}, 
+                                 {location: new google.maps.LatLng(48.844878,2.271742)}, 
+                                 {location: new google.maps.LatLng(48.8467,2.275518)}, 
+                                 {location: new google.maps.LatLng(48.8479,2.289917)}])
+        );
+        
+        
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.854679,2.295321),
+                                '15:12',
+                                'Rue Desaix',
+                                'o9m_ThakMks')
+        );
+        
+
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.856243,2.297652),
+                                '15:15',
+                                'Champ de Mars',
+                                '7mQOqIvYWCI')
+        );
+        
+
+        locations.push(
+            new YoutubeLocation(new google.maps.LatLng(48.853322,2.302255),
+                                '15:30',
+                                'Champ de Mars 2',
+                                'fziu5twIBv8')
+        );
+        
+        
+        locations.push( 
+            new YoutubeLocation(new google.maps.LatLng(48.853802,2.312426),
+                                '15:35',
+                                'Invalides',
+                                'W8TObqEDQm0',
+                                [{location: new google.maps.LatLng(48.845316,2.320987)}])
+        );
+        
+        
+        locations.push(new MultimediaLocationMultiple([
+          new YoutubeLocation(new google.maps.LatLng(48.847222,2.33678),
+                              '16:06',
+                              'Jardin du Luxembourg',
+                              'agS3iM45584'),
+          new YoutubeLocation(new google.maps.LatLng(48.847222,2.33678),
+                              '16:22',
+                              'Jardin du Luxembourg',
+                              'NsDVn8cquqo',
+                              [],
+                              false),
+          new YoutubeLocation(new google.maps.LatLng(48.847222,2.33678),
+                              '16:23',
+                              'Jardin du Luxembourg',
+                              'UnzWyjlh1p8',
+                              [],
+                              false)
+        ]));
+        
+        /*
+        locations.push(
+            new MultimediaLocation(new google.maps.LatLng(48.847222,2.33678),
+                                   '16:06',
+                                'Jardin du Luxembourg',
+                                '<iframe width="420" height="315" src="http://www.youtube.com/embed/agS3iM45584?rel=0&autoplay=1" frameborder="0" allowfullscreen></iframe>'+
+                                   '<br>'+
+                                  '<iframe width="420" height="315" src="http://www.youtube.com/embed/NsDVn8cquqo?rel=0" frameborder="0" allowfullscreen></iframe>'+
+                                   '<br>'+
+                                  '<iframe width="420" height="315" src="http://www.youtube.com/embed/UnzWyjlh1p8?rel=0" frameborder="0" allowfullscreen></iframe>'
+                                  )
+        );
+        */
+        
+        locations.push(
+          new YoutubeLocation(new google.maps.LatLng(48.846545,2.344505),
+                                '16:44',
+                                'Panthéon',
+                                '6rxEYLxPAA0')
+        );
+        
+        
+        locations.push( 
+            new YoutubeLocation(new google.maps.LatLng(48.849143,2.355792),
+                                '16:50',
+                                'Institut du monde arabe',
+                                '4bvxLFXJQLs',
+                                [{location: new google.maps.LatLng(48.850661,2.359763)}])
+          );
+        
+        
+        locations.push( 
+            new YoutubeLocation(new google.maps.LatLng(48.851105,2.357937),
+                                '17:09',
+                                'Glace Berthillon Île Saint-Louis',
+                                '2w_ZyqShu1M',
+                                [{location: new google.maps.LatLng(48.853548,2.369601)}])
+          );
+                
+        
+        locations.push( 
+            new YoutubeLocation(new google.maps.LatLng(48.873071,2.364332),
+                                '17:35',
+                                'Canal Saint-Martin',
+                                '2t7v6qC7zK8')
+          );
+                
+        
+        locations.push( 
+            new YoutubeLocation(new google.maps.LatLng(48.885192,2.374429),
+                                '17:43',
+                                'Canal Saint-Martin 2',
+                                'pUfeOgXNp6M')
+          );
+        
+        
+        
+        locations.push( 
+            new YoutubeLocation(new google.maps.LatLng(48.890632,2.384548),
+                                '17:46',
+                                'L\'arrivée',
+                                'AT1OWBBGnx4')
+          );
+
+                         
+        return locations;
+      }
+      
+
+      function createLocationMarkers(map, locations, currentLocation){
+        function locationToHTML(location){
+          var html = location.title + '  @ ' + location.time + '<br>' + location.html;
+          return html;
+        }
+        
+        var markers = [];
+        var currentlyOpenInfoWindow = null;
+        
+        $.each(locations, function(){
+          console.log(this.getShadow());
+          var marker = new google.maps.Marker({
+            map: map,
+            position: this.latLng,
+            title: this.title,
+            icon: this.getIconURL(),
+            //shadow: this.getShadow(),
+          });
+          
+          var infoWindow = new google.maps.InfoWindow({
+            content:locationToHTML(this)
+          });
+          google.maps.event.addListener(infoWindow, 'closeclick', function(){
+            this.close();
+            currentlyOpenInfoWindow == null;
+          //  highlightLocation(null, map);
+          });
+          //marker knows which location it is associated with
+          marker.multimediaLocation = this;
+          marker.infoWindow = infoWindow;
+          google.maps.event.addListener(marker, 'click', function(){
+            currentLocation.setCurrentLocation(marker.multimediaLocation);
+          });
+          
+          markers.push(marker);
+        });
+        
+        function handleSelectionChange(newLocation){
+          //search marker associated with location
+          var newMarker = null;
+          $(markers).each(function(){
+            if(this.multimediaLocation === newLocation){
+              newMarker = this;
+              return false;
+            }
+          });
+          if(newMarker != null){
+            if(currentlyOpenInfoWindow != null) currentlyOpenInfoWindow.close();
+            newMarker.infoWindow.open(map, newMarker);
+            currentlyOpenInfoWindow = newMarker.infoWindow;
+          }
+        };
+        
+        google.maps.event.addListener(currentLocation, 'selectionChange', handleSelectionChange);
+        
+        return markers;
+      }
+      
+      
+      /*
+      function highlightLocation(location, map){
+        highlightMarker(location, map);
+        timeline.highlightLocation(location);
+      }
+      
+      //google map api doesn't tell us which infowindow are open. 
+      //Manually keep track of the one currently open
+      var currentlyOpenInfoWindow = null;
+      
+      function highlightMarker(location, map){
+        //search marker associated with location
+        var newMarker = null;
+        $(markers).each(function(){
+          if(this.multimediaLocation === location){
+            newMarker = this;
+            return false;
+          }
+        });
+        
+        //location == null -> must close open window
+        if(currentlyOpenInfoWindow !== null && (newMarker == null || currentlyOpenInfoWindow != newMarker.infoWindow) ){
+          currentlyOpenInfoWindow.close();
+          currentlyOpenInfoWindow = null;
+        }
+        if(newMarker != null){
+          newMarker.infoWindow.open(map, newMarker);
+          currentlyOpenInfoWindow = newMarker.infoWindow;
+        }
+      }
+*/
+      
+      
+      //ask from the google map api a separate direction between each marker.
+      //Could ask a single direction with the various locations as waypoints.
+      function createDirections(map, locations){
+        var rendererOptions = {map: map,
+                               suppressMarkers: true,
+                               suppressInfoWindows: true,
+                               suppressBicyclingLayer: true,
+                               hideRouteList: true,
+                               preserveViewport: true,
+                              };
+        
+        //the google api restricts the number of consecutive requests:
+        //-limit rate of request
+        //-if reach query limit : wait a bit before requesting again
+        function createDirectionsRec(locations, attemptsLeft){
+          if(attemptsLeft == 0) return;
+          if(locations.length < 2) return;
+          
+          var startLocation = locations[0];
+          var endLocation = locations[1];
+          
+          var directionsDisplay = new google.maps.DirectionsRenderer(rendererOptions);
+          var directionsService = new google.maps.DirectionsService();
+          var request = {
+            origin: startLocation.latLng,
+            destination: endLocation.latLng,
+            waypoints: startLocation.waypointsToNextLocation,
+            //WALKING gives better result than BICYCLING (BICYCLING doesn't take one way road the wrong way)
+            travelMode: google.maps.TravelMode.WALKING
+          };
+          
+          directionsService.route(request, function(response, status){
+            console.log(response + " " + status);
+              if(status == google.maps.DirectionsStatus.OK){
+                directionsDisplay.setDirections(response);
+                setTimeout(function() {
+                  createDirectionsRec(locations.slice(1), attemptsLeft);
+                }, 200);                
+              }else /*if(status == google.maps.DirectionsStatus.OVER_QUERY_LIMIT)*/{
+                setTimeout(function() {
+                  createDirectionsRec(locations, attemptsLeft - 1);
+                }, 2500);
+              }
+            });
+        }
+          createDirectionsRec(locations, 20);
+      }
+      
+      
+      /** Google map control to visualize the timeline and navigate trough the events of the day*/
+      function TimelineControl(currentLocation){
+        
+        function handleSelectionChange(newLocation, previousLocation){
+          $(locationsDiv).children().each(function(){
+            if(this.multimediaLocation === newLocation){
+              this.style.backgroundColor = '#bbb';
+            }else if(this.multimediaLocation === previousLocation){
+              this.style.backgroundColor = 'white';
+            }
+          });
+        }
+        google.maps.event.addListener(currentLocation, 'selectionChange', handleSelectionChange);
+        
+        this.timelineDiv = document.createElement('div');
+        //prevents the control from being against the border
+        this.timelineDiv.style.padding = '5px';
+        
+        // Set CSS for the control border.
+        this.controlUI = document.createElement('div');
+        this.controlUI.style.backgroundColor = 'white';
+        this.controlUI.style.borderColor = '#bbb';
+        this.controlUI.style.borderStyle = 'solid';
+        this.controlUI.style.borderWidth = '1px';
+        this.controlUI.style.borderRadius = '4px';
+        this.controlUI.style.cursor = 'pointer';
+        this.controlUI.style.textAlign = 'left';
+        this.controlUI.title = 'My Control';
+        this.timelineDiv.appendChild(this.controlUI);
+        
+        // Set CSS for the control interior.
+        var titleText = document.createElement('div');
+        titleText.style.fontFamily = 'Arial,sans-serif';
+        titleText.style.fontSize = '12px';
+        titleText.style.paddingLeft = '4px';
+        titleText.style.paddingRight = '4px';
+        titleText.style.textAlign = 'center';
+        titleText.style.font = 'bold';
+        titleText.innerHTML = '<strong>Lieux</strong>';
+        this.controlUI.appendChild(titleText);
+        
+        this.locationsDiv = document.createElement('div');
+        var locationsDiv = this.locationsDiv;
+        this.controlUI.appendChild(this.locationsDiv);
+        
+        
+        var moveDivs = document.createElement('div');
+        moveDivs.style.width = '100%';
+        this.controlUI.appendChild(moveDivs);
+
+        
+        var prev = document.createElement('div');
+        prev.innerHTML='Prev';
+        prev.style.float = 'left';
+        prev.style.display = 'inline';
+        prev.style.width = '40%';
+        prev.style.backgroundColor = 'white';
+        prev.style.borderColor = '#bbb';
+        prev.style.borderStyle = 'solid';
+        prev.style.borderWidth = '1px';
+        prev.style.borderRadius = '4px';
+        prev.style.cursor = 'pointer';
+        google.maps.event.addDomListener(prev, 'click', function(){
+          currentLocation.selectPreviousLocation();
+        });
+        moveDivs.appendChild(prev);
+        
+        
+        var next = document.createElement('div');
+        next.innerHTML='Next';
+        next.style.float = 'right';
+        next.style.display = 'inline';
+        next.style.width = '40%';
+        next.style.textAlign = 'right';
+        next.style.backgroundColor = 'white';
+        next.style.borderColor = '#bbb';
+        next.style.borderStyle = 'solid';
+        next.style.borderWidth = '1px';
+        next.style.borderRadius = '4px';
+        next.style.cursor = 'pointer';
+        google.maps.event.addDomListener(next, 'click', function(){
+          currentLocation.selectNextLocation();
+        });
+        moveDivs.appendChild(next);
+         
+      }
+      
+      TimelineControl.prototype.getDiv = function getDiv(){
+        return this.timelineDiv;
+      };
+      TimelineControl.prototype.addNextLocation = function(location){
+        function createTimelineEventDiv(title, time){
+          var timelineEvent = document.createElement('div');
+          timelineEvent.style.paddingLeft = '4px';
+          timelineEvent.style.paddingRight = '4px';
+          timelineEvent.innerHTML = time + ' ' + title + '<br>';
+          timelineEvent.multimediaLocation = location;
+          
+          google.maps.event.addDomListener(timelineEvent, 'click', function(){
+            currentLocation.setCurrentLocation(timelineEvent.multimediaLocation);
+          });
+          return timelineEvent;     
+        }
+        var timelineEvent = createTimelineEventDiv(location.title, location.time);
+        this.locationsDiv.appendChild(timelineEvent);
+      };
+      /*TimelineControl.prototype.highlightLocation = function(location){
+        $(this.controlUI).children().each(function(){
+          console.log(this, this.multimediaLocation, location); 
+          if(this.multimediaLocation === location){
+            this.style.backgroundColor = '#bbb';
+          }else{
+            this.style.backgroundColor = 'white';
+          }
+        });
+      };
+      */
+      
+      function createTimelineControl(locations, currentLocation){
+        var timeline = new TimelineControl(currentLocation);
+        $.each(locations, function(){
+          timeline.addNextLocation(this);
+        });
+        map.controls[google.maps.ControlPosition.RIGHT_CENTER].push(timeline.getDiv());
+        return timeline;
+      }
+      
+
+    </script>
+  
+<style id="jsbin-css">
+
+</style>
 </head>
   <body>
-    
-    <img src="preview.png" />
+    <div id="map-canvas"/>
   <script>
 
 </script>
